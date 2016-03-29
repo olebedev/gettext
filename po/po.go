@@ -13,8 +13,10 @@ import (
 // File represents a PO file.
 type File struct {
 	Header    textproto.MIMEHeader
-	Messages  []Message
+	Messages  []*Message
 	Pluralize PluralSelector
+
+	byId map[string]*Message
 }
 
 // Message stores a gettext message.
@@ -38,12 +40,13 @@ type Comment struct {
 }
 
 // Parse reads the content of a PO file and returns the list of messages.
-func Parse(r io.Reader) (File, error) {
-	var msgs []Message
+func Parse(r io.Reader) (*File, error) {
+	var msgs []*Message
+	var byId = make(map[string]*Message)
 	var scan = newScanner(r)
 	for scan.nextmsg() {
 		// NOTE: the source code order of these fields is important.
-		var msg = Message{
+		var msg = &Message{
 			Comment: Comment{
 				TranslatorComments: scan.mul("# "),
 				ExtractedComments:  scan.mul("#."),
@@ -59,9 +62,10 @@ func Parse(r io.Reader) (File, error) {
 			Str:      scan.msgstr(),
 		}
 		msgs = append(msgs, msg)
+		byId[compoundId(msg.Id, msg.IdPlural)] = msg
 	}
 	if scan.Err() != nil {
-		return File{}, scan.Err()
+		return nil, scan.Err()
 	}
 
 	var header textproto.MIMEHeader
@@ -70,7 +74,7 @@ func Parse(r io.Reader) (File, error) {
 		header, err = textproto.NewReader(bufio.NewReader(strings.NewReader(msgs[0].Str[0]))).
 			ReadMIMEHeader()
 		if err != nil && err != io.EOF {
-			return File{}, err
+			return nil, err
 		}
 		msgs = msgs[1:]
 	}
@@ -79,14 +83,14 @@ func Parse(r io.Reader) (File, error) {
 	if pluralForms := header.Get("Plural-Forms"); pluralForms != "" {
 		pluralize = lookupPluralSelector(pluralForms)
 		if pluralize == nil {
-			return File{}, fmt.Errorf("unrecognized plural form selector: %v", pluralForms)
+			return nil, fmt.Errorf("unrecognized plural form selector: %v", pluralForms)
 		}
 	}
 	if pluralize == nil {
 		pluralize = PluralSelectorForLanguage(header.Get("Language"))
 	}
 
-	return File{header, msgs, pluralize}, nil
+	return &File{header, msgs, pluralize, byId}, nil
 }
 
 // Write the PO file to a destination writer.
@@ -141,4 +145,38 @@ func (c Comment) WriteTo(w io.Writer) (n int64, err error) {
 	wr.one("#| msgid ", c.PrevId)
 	wr.one("#| msgid_plural ", c.PrevIdPlural)
 	return wr.to(w)
+}
+
+// GetText.
+func (f *File) GetText(id string, data ...interface{}) string {
+	str := id
+	msg := f.getByIds(id)
+
+	if msg != nil && len(msg.Str) != 0 && msg.Str[0] != "" {
+		str = msg.Str[0]
+	}
+
+	return fmt.Sprintf(str, data...)
+}
+
+// NGetText.
+func (f *File) NGetText(id, idPlural string, lenght int, data ...interface{}) string {
+	msg := f.getByIds(id, idPlural)
+	str := id
+	index := f.Pluralize(lenght)
+
+	if msg != nil && len(msg.Str) > index && msg.Str[index] != "" {
+		str = msg.Str[index]
+	}
+
+	return fmt.Sprintf(str, data...)
+}
+
+func (f *File) getByIds(ids ...string) *Message {
+	msg := f.byId[compoundId(ids...)]
+	return msg
+}
+
+func compoundId(ids ...string) string {
+	return strings.Trim(strings.Join(ids, "|"), "|")
 }
