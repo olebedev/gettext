@@ -162,8 +162,11 @@ func (f *File) GetText(id string, data ...interface{}) string {
 // NGetText.
 func (f *File) NGetText(id, idPlural string, lenght int, data ...interface{}) string {
 	msg := f.getByIds(id, idPlural)
-	str := id
 	index := f.Pluralize(lenght)
+	str := id
+	if index == 1 {
+		str = idPlural
+	}
 
 	if msg != nil && len(msg.Str) > index && msg.Str[index] != "" {
 		str = msg.Str[index]
